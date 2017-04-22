@@ -107,15 +107,18 @@ create_ssl_cert () {
     >/dev/null
 
   if [ $? -ne 0 ] ; then
-    echo "SSL Certificate creation failed."
+    error_exit "SSL Certificate creation failed"
+  else
+    echo "Wrote new key to ${ssl_key_file} and new cert to ${ssl_cert_file}"
   fi
 
-  echo "Wrote new key to ${ssl_key_file} and new cert to ${ssl_cert_file}"
 
 }
 
 import_certificate () {
 
+## ACM version (instead of IAM)
+## if using, make sure to update create_balancer to use arn instead of id
 #  aws_response=$(
 #    ${aws_bin} acm \
 #      import-certificate \
@@ -126,6 +129,9 @@ import_certificate () {
 #    echo "${aws_response}" \
 #      | ${jq_bin} --raw-output '.CertificateArn'
 #  )
+#  echo "Imported cert to AWS ACM with ARN ${certificate_arn}"
+#  echo "certificate_arn='${certificate_arn}'" >> env.sh
+
   aws_response=$(
     ${aws_bin} iam \
       upload-server-certificate \
@@ -133,14 +139,21 @@ import_certificate () {
         --certificate-body "$( cat ${ssl_cert_file} )" \
         --private-key "$( cat ${ssl_key_file} )"
 )
+#  certificate_id=$(
+#    echo "${aws_response}" \
+#      | ${jq_bin} --raw-output '.ServerCertificateMetadata.ServerCertificateId'
+#  )
   certificate_arn=$(
     echo "${aws_response}" \
       | ${jq_bin} --raw-output '.ServerCertificateMetadata.Arn'
   )
 
-  echo "Imported cert to AWS ACM with ARN ${certificate_arn}"
-
-  echo "certificate_arn='${certificate_arn}'" >> env.sh
+  if [ -n "${certificate_arn}" ] ; then
+    echo "Imported certificate to AWS IAM with ARN ${certificate_arn}"
+    echo "certificate_arn='${certificate_arn}'" >> env.sh
+  else
+    error_exit "failed to import certificate"
+  fi
 
 }
 
@@ -174,9 +187,12 @@ create_vpc () {
       | ${jq_bin} --raw-output '.Vpc.VpcId'
   )
 
-  echo "Created VPC with ID ${vpc_id} using CIDR block ${vpc_cidr_block}"
-
-  echo "vpc_id='${vpc_id}'" >> env.sh
+  if [ -n "${vpc_id}" ] ; then
+    echo "Found/created VPC with ID ${vpc_id} using CIDR block ${vpc_cidr_block}"
+    echo "vpc_id='${vpc_id}'" >> env.sh
+  else
+    error_exit "failed to create VPC"
+  fi
 
 }
 
@@ -211,9 +227,12 @@ create_subnet () {
       | ${jq_bin} --raw-output '.Subnet.SubnetId'
   )
 
-  echo "Created subnet with ID ${subnet_id} in VPC ${vpc_id}"
-
-  echo "subnet_id='${subnet_id}'" >> env.sh
+  if [ -n "${subnet_id}" ] ; then
+    echo "Found/created subnet with ID ${subnet_id} in VPC ${vpc_id}"
+    echo "subnet_id='${subnet_id}'" >> env.sh
+  else
+    error_exit "failed to create subnet"
+  fi
 }
 
 create_internet_gateway () {
@@ -227,9 +246,12 @@ create_internet_gateway () {
       | ${jq_bin} --raw-output '.InternetGateway.InternetGatewayId'
   )
 
-  echo "Created internet gateway with ID ${internet_gateway_id}"
-
-  echo "internet_gateway_id='${internet_gateway_id}'" >> env.sh
+  if [ -n "${internet_gateway_id}" ] ; then
+    echo "Created internet gateway with ID ${internet_gateway_id}"
+    echo "internet_gateway_id='${internet_gateway_id}'" >> env.sh
+  else
+    error_exit "failed to create internet gateway"
+  fi
 }
 
 attach_internet_gateway () {
@@ -260,9 +282,12 @@ create_balancer_security_group () {
       | ${jq_bin} --raw-output '.GroupId'
   )
 
-  echo "Created balancer security group named ${base_name}-balancer-sg with ID ${balancer_security_group_id}"
-
-  echo "balancer_security_group_id='${balancer_security_group_id}'" >> env.sh
+  if [ -n "${balancer_security_group_id}" ] ; then
+    echo "Created balancer security group named ${base_name}-balancer-sg with ID ${balancer_security_group_id}"
+    echo "balancer_security_group_id='${balancer_security_group_id}'" >> env.sh
+  else
+    error_exit "failed to create balancer security group"
+  fi
 }
 
 create_balancer () {
@@ -282,9 +307,12 @@ create_balancer () {
       | ${jq_bin} --raw-output '.DNSName'
   )
 
-  echo "Created load balancer named ${base_name}-elb with listeners on ports ${http_port} and ${https_port}; DNS is ${elb_dns_name}"
-
-  echo "elb_dns_name='${elb_dns_name}'" >> env.sh
+  if [ -n "${elb_dns_name}" ] ; then
+    echo "Created load balancer named ${base_name}-elb with listeners on ports ${http_port} and ${https_port}; DNS is ${elb_dns_name}"
+    echo "elb_dns_name='${elb_dns_name}'" >> env.sh
+  else
+    error_exit "failed to create balancer"
+  fi
 }
 
 create_keypair () {
@@ -631,6 +659,7 @@ attach_internet_gateway
 
 # create the ELB balancer with its own security group
 create_balancer_security_group
+sleep 60
 create_balancer
 
 # create the instances with their own keypair and security group
