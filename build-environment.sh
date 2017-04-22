@@ -104,15 +104,13 @@ create_ssl_cert () {
     -out "${ssl_cert_file}" \
     -days 3650 \
     -subj "/C=US/ST=California/L=San Diego/O=Teradata/OU=Meyers/CN=${website_fqdn}" \
-    >/dev/null
+    2>/dev/null
 
   if [ $? -ne 0 ] ; then
     error_exit "SSL Certificate creation failed"
   else
-    echo "Wrote new key to ${ssl_key_file} and new cert to ${ssl_cert_file}"
+    echo "Wrote new SSL key to ${ssl_key_file} and new SSL cert to ${ssl_cert_file}"
   fi
-
-
 }
 
 import_certificate () {
@@ -292,20 +290,35 @@ create_balancer_security_group () {
 
 create_balancer () {
 
-  aws_response=$(
-    ${aws_bin} elb \
-      create-load-balancer \
-        --load-balancer-name "${base_name}-elb" \
-        --listeners \
-          "Protocol=http,LoadBalancerPort=${http_port},InstanceProtocol=http,InstancePort=${instance_port}" \
-          "Protocol=https,LoadBalancerPort=${https_port},InstanceProtocol=http,InstancePort=${instance_port},SSLCertificateId=${certificate_arn}" \
-        --subnets "${subnet_id}" \
-        --security-groups "${balancer_security_group_id}"
-  )
-  elb_dns_name=$(
-    echo "${aws_response}" \
-      | ${jq_bin} --raw-output '.DNSName'
-  )
+  # there seems to be a propagation delay on the IAM cert
+  # so retry this if it fails
+  # eventually every operation should retry, but this one is critical now
+
+  for i in 1 2 3 4 5 ; do
+
+    aws_response=$(
+      ${aws_bin} elb \
+        create-load-balancer \
+          --load-balancer-name "${base_name}-elb" \
+          --listeners \
+            "Protocol=http,LoadBalancerPort=${http_port},InstanceProtocol=http,InstancePort=${instance_port}" \
+            "Protocol=https,LoadBalancerPort=${https_port},InstanceProtocol=http,InstancePort=${instance_port},SSLCertificateId=${certificate_arn}" \
+          --subnets "${subnet_id}" \
+          --security-groups "${balancer_security_group_id}"
+    )
+    elb_dns_name=$(
+      echo "${aws_response}" \
+        | ${jq_bin} --raw-output '.DNSName'
+    )
+
+    if [ -n "${elb_dns_name}" ] ; then
+      break
+    else
+      echo "retrying..." # not true for the last loop
+    fi
+
+    sleep 2
+  done
 
   if [ -n "${elb_dns_name}" ] ; then
     echo "Created load balancer named ${base_name}-elb with listeners on ports ${http_port} and ${https_port}; DNS is ${elb_dns_name}"
@@ -370,6 +383,7 @@ create_instances () {
       | ${jq_bin} --raw-output '.Instances[].InstanceId'
   )
 
+  echo "Created instances with IDs "${instance_ids}
   echo "instance_ids='${instance_ids}'" >> env.sh
 
   echo -n "Waiting for instances to become available..."
@@ -401,7 +415,6 @@ create_instances () {
   done
   echo
 
-  echo "Created instances with IDs "${instance_ids}
 }
 
 create_route_table () {
@@ -557,11 +570,12 @@ install_software () {
     let attempts_done++
     connects_failed=0
     for public_ip in ${public_ips} ; do
-      ${ssh_bin} -o StrictHostKeyChecking=no \
+      ${ssh_bin} -o StrictHostKeyChecking=no -o LogLevel=ERROR\
         -i "${ssh_key_file}" \
         -l ubuntu \
         ${public_ip} \
-        hostname
+        hostname \
+        >/dev/null
       if [ $? != 0 ] ; then
         let connects_failed++
       fi
@@ -580,10 +594,10 @@ install_software () {
       software='nginx'
     fi
     script="${software}-install-config.sh"
-    ${scp_bin} -p \
+    ${scp_bin} -o LogLevel=QUIET -p \
       -i "${ssh_key_file}" \
       "${script}" ubuntu@${public_ip}:
-    ${ssh_bin} \
+    ${ssh_bin} -o LogLevel=ERROR \
       -i "${ssh_key_file}" \
       -l ubuntu \
       ${public_ip} \
@@ -659,7 +673,6 @@ attach_internet_gateway
 
 # create the ELB balancer with its own security group
 create_balancer_security_group
-sleep 60
 create_balancer
 
 # create the instances with their own keypair and security group
