@@ -4,6 +4,8 @@
 
 Simply execute teradata-challenge/build-environment.sh. It will create a working directory and create artifacts within that directory as it builds the AWS environment. Since it does create a subdirectory, it's preferable to execute it from outside the teradata-challenge directory.
 
+AWS credentials are required, so if you haven't already set them for the AWS CLI make sure to run "aws configure" first.
+
 # Requirements
 
   * a linux box to run it on
